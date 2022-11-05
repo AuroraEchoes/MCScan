@@ -1,6 +1,6 @@
 use std::{io::{Error, Result, ErrorKind}, fs::File, str::FromStr};
 use async_minecraft_ping::{connect, StatusResponse, ServerDescription, ServerPlayers};
-use serde::{Deserialize};
+use serde::{Deserialize, __private::ser};
 use uuid::{Uuid};
 
 #[tokio::main]
@@ -14,9 +14,13 @@ async fn main() -> Result<()>{
 async fn ingest_masscan_data() -> Result<Vec<MinecraftServer>> {
     let scan = File::open("scan.json")?;
     let scanned_servers: Vec<PingedServer> = serde_json::from_reader(scan)?;
-    
-
-
+    let mut verified_servers: Vec<MinecraftServer> = Vec::new();
+    for server in scanned_servers {
+        if let Ok(server) = ping_server(server).await {
+            verified_servers.push(server);
+        }
+    }
+    println!("{:?}", verified_servers);
     return Ok(Vec::new());
 }
 
