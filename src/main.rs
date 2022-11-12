@@ -1,7 +1,11 @@
-use std::{io::{Error, Result, ErrorKind}, fs::File, str::FromStr};
+use std::{io::{Error, Result, ErrorKind}, fs::File, str::FromStr, sync::RwLock, thread};
 use async_minecraft_ping::{connect, StatusResponse, ServerDescription, ServerPlayers};
 use serde::{Deserialize, __private::ser};
+use tokio::task::JoinHandle;
 use uuid::{Uuid};
+use futures::future::join_all;
+
+const THREADS: usize = 16;
 
 #[tokio::main]
 async fn main() -> Result<()>{
@@ -12,15 +16,28 @@ async fn main() -> Result<()>{
 // Let's presume that we already have json scan data from masscan
 
 async fn ingest_masscan_data() -> Result<Vec<MinecraftServer>> {
+    let mut sl: RwLock<Vec<MinecraftServer>> = RwLock::new(Vec::new());
     let scan = File::open("scan.json")?;
     let scanned_servers: Vec<PingedServer> = serde_json::from_reader(scan)?;
-    let mut verified_servers: Vec<MinecraftServer> = Vec::new();
-    for server in scanned_servers {
-        if let Ok(server) = ping_server(server).await {
-            verified_servers.push(server);
-        }
+    let server_chunks: Vec<Vec<PingedServer>> = scanned_servers
+        .chunks(scanned_servers.len() / THREADS)
+        .map(|server| server.into())
+        .collect();
+    let mut threads: Vec<JoinHandle<()>> = Vec::new();
+    for chunk in server_chunks {
+        let mut servers: Vec<MinecraftServer> = Vec::new();
+        threads.push(tokio::spawn(async move {
+            for target in chunk {
+                match ping_server(target).await {
+                    Ok(s) => servers.push(s),
+                    Err(_) => {}
+                }
+            }
+        
+        println!("{:?}", servers);
+        }));
     }
-    println!("{:?}", verified_servers);
+    join_all(threads).await;
     return Ok(Vec::new());
 }
 
@@ -28,6 +45,8 @@ async fn ping_server(target: PingedServer) -> Result<MinecraftServer> {
     if let Ok(connection) = connect(target.ip.clone()).await {// TODO: Tweak connection config
         if let Ok(ping) = connection.status().await {
             return Ok(MinecraftServer::from_status(ping.status, target.ip));
+        }
+        else {
         }
     }
     return Err(Error::new(ErrorKind::NotFound, format!("A server could not be reached")))
@@ -89,7 +108,7 @@ impl Player {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct PingedServer {
     ip: String,
     timestamp: String // This might become a problem in 2031 lol
