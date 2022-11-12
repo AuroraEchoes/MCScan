@@ -1,4 +1,4 @@
-use std::{io::{Error, Result, ErrorKind}, fs::File, str::FromStr, sync::RwLock, thread};
+use std::{io::{Error, Result, ErrorKind}, fs::File, str::FromStr};
 use async_minecraft_ping::{connect, StatusResponse, ServerDescription, ServerPlayers};
 use serde::{Deserialize, __private::ser};
 use tokio::task::JoinHandle;
@@ -16,14 +16,14 @@ async fn main() -> Result<()>{
 // Let's presume that we already have json scan data from masscan
 
 async fn ingest_masscan_data() -> Result<Vec<MinecraftServer>> {
-    let mut sl: RwLock<Vec<MinecraftServer>> = RwLock::new(Vec::new());
+
     let scan = File::open("scan.json")?;
     let scanned_servers: Vec<PingedServer> = serde_json::from_reader(scan)?;
     let server_chunks: Vec<Vec<PingedServer>> = scanned_servers
         .chunks(scanned_servers.len() / THREADS)
         .map(|server| server.into())
         .collect();
-    let mut threads: Vec<JoinHandle<()>> = Vec::new();
+    let mut threads: Vec<JoinHandle<Vec<MinecraftServer>>> = Vec::new();
     for chunk in server_chunks {
         let mut servers: Vec<MinecraftServer> = Vec::new();
         threads.push(tokio::spawn(async move {
@@ -33,12 +33,18 @@ async fn ingest_masscan_data() -> Result<Vec<MinecraftServer>> {
                     Err(_) => {}
                 }
             }
-        
-        println!("{:?}", servers);
+        return servers;
         }));
     }
-    join_all(threads).await;
-    return Ok(Vec::new());
+    let servers = join_all(threads).await;
+    let mut pruned_servers: Vec<MinecraftServer> = Vec::new();
+    for result in servers {
+        match result {
+            Ok(mut sl) => pruned_servers.append(&mut sl),
+            Err(_) => {}
+        }
+    }
+    return Ok(pruned_servers);
 }
 
 async fn ping_server(target: PingedServer) -> Result<MinecraftServer> {
@@ -51,7 +57,7 @@ async fn ping_server(target: PingedServer) -> Result<MinecraftServer> {
     }
     return Err(Error::new(ErrorKind::NotFound, format!("A server could not be reached")))
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MinecraftServer {
     ip: String,
     version: String,
@@ -84,7 +90,7 @@ impl MinecraftServer {
 
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Player {
     username: String,
     uuid: Uuid
